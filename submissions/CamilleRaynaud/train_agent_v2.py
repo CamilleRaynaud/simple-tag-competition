@@ -329,4 +329,4 @@ def train(total_updates=1200, seed=0, device="cpu"):
 
 
 if __name__ == "__main__":
-    train(total_updates=1200, seed=0, device="cpu")
+    train(total_updates=1200, seed=0, device="cuda")
