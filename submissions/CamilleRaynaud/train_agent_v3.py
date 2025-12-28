@@ -5,7 +5,6 @@ import numpy as np
 from pettingzoo.mpe import simple_tag_v3
 from pathlib import Path
 import random
-from collections import deque
 
 # ===== Hyperparameters =====
 HIDDEN_DIM = 256
@@ -13,13 +12,12 @@ LR = 3e-4
 GAMMA = 0.99
 EPS_CLIP = 0.2
 ENTROPY_COEF = 0.01
-MAX_EPISODES = 10000  # Réaliste pour commencer
+MAX_EPISODES = 10000  # moins que 50k pour commencer
 MAX_CYCLES = 50
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 EPOCHS = 5
 ACTION_DIM = 5
 LOG_INTERVAL = 50
-SAVE_INTERVAL = 500
 SLIDING_WINDOW = 100
 
 # ===== Actor & Critic =====
@@ -61,12 +59,19 @@ def ppo_update(actor, critic, optimizer_actor, optimizer_critic, states, actions
     else:
         states_critic = torch.tensor(np.array(states_critic), dtype=torch.float32, device=DEVICE)
 
+    # Normalize returns
+    returns = (returns - returns.mean()) / (returns.std() + 1e-8)
+
     for _ in range(EPOCHS):
         logits = actor(states)
         dist = torch.distributions.Categorical(logits=logits)
         old_dist = torch.distributions.Categorical(logits=old_logits)
         ratio = torch.exp(dist.log_prob(actions) - old_dist.log_prob(actions))
+
+        # Advantage normalized
         advantage = returns - critic(states_critic).squeeze()
+        advantage = (advantage - advantage.mean()) / (advantage.std() + 1e-8)
+
         surr1 = ratio * advantage
         surr2 = torch.clamp(ratio, 1 - EPS_CLIP, 1 + EPS_CLIP) * advantage
         actor_loss = -torch.min(surr1, surr2).mean()
@@ -91,14 +96,19 @@ def train():
     obs_dict, infos = env.reset()
     sample_agent = [a for a in obs_dict.keys() if "adversary" in a][0]
     obs_dim = len(obs_dict[sample_agent])
+
     actor = Actor(obs_dim=obs_dim).to(DEVICE)
-    critic = Critic(obs_dim=obs_dim*3).to(DEVICE)
+    critic = Critic(obs_dim=obs_dim*3).to(DEVICE)  # 3 predators
     optimizer_actor = optim.Adam(actor.parameters(), lr=LR)
     optimizer_critic = optim.Adam(critic.parameters(), lr=LR)
+    scheduler_actor = optim.lr_scheduler.StepLR(optimizer_actor, step_size=1000, gamma=0.95)
+    scheduler_critic = optim.lr_scheduler.StepLR(optimizer_critic, step_size=1000, gamma=0.95)
 
-    sliding_rewards = deque(maxlen=SLIDING_WINDOW)
+    sliding_rewards = []
+    best_avg_reward = -np.inf
+    stagnant_counter = 0
 
-    for episode in range(1, MAX_EPISODES + 1):
+    for episode in range(1, MAX_EPISODES+1):
         obs_dict, infos = env.reset()
         memory = {'states_actor': [], 'states_critic': [], 'actions': [], 'rewards': [], 'logits': []}
         episode_reward = 0
@@ -141,7 +151,11 @@ def train():
                 break
 
         sliding_rewards.append(episode_reward)
+        if len(sliding_rewards) > SLIDING_WINDOW:
+            sliding_rewards.pop(0)
+        avg_reward = np.mean(sliding_rewards)
 
+        # PPO update
         returns = []
         R = 0
         for r in reversed(memory['rewards']):
@@ -152,21 +166,28 @@ def train():
                    memory['states_actor'], memory['actions'], returns, memory['logits'],
                    states_critic=memory['states_critic'])
 
-        # ===== Logging =====
+        scheduler_actor.step()
+        scheduler_critic.step()
+
+        # Logging
         if episode % LOG_INTERVAL == 0:
-            avg_reward = np.mean(sliding_rewards)
             print(f"Episode {episode}/{MAX_EPISODES} | Avg Reward (last {SLIDING_WINDOW}): {avg_reward:.2f}")
 
-        # ===== Save model =====
-        if episode % SAVE_INTERVAL == 0:
-            save_path = Path("predator_model.pth")
-            torch.save(actor.state_dict(), save_path)
-            print(f"Model saved at episode {episode}")
+        # Save best model
+        if avg_reward > best_avg_reward:
+            best_avg_reward = avg_reward
+            torch.save(actor.state_dict(), Path("predator_model_best.pth"))
+            stagnant_counter = 0
+        else:
+            stagnant_counter += LOG_INTERVAL
 
-    # Save final model
-    save_path = Path("predator_model.pth")
-    torch.save(actor.state_dict(), save_path)
-    print("Training completed. Final model saved.")
+        # Early stopping
+        if stagnant_counter >= 1000:
+            print("Rewards plateaued, stopping early")
+            break
+
+    print(f"Training completed. Best avg reward: {best_avg_reward:.2f}")
+    torch.save(actor.state_dict(), Path("predator_model_last.pth"))
 
 if __name__ == "__main__":
     train()
