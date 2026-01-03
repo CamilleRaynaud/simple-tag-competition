@@ -80,7 +80,7 @@ class StudentAgent:
 #####  Commentaire 
 
 # Pour ce projet, j’ai commencé par implémenter une version très simple de PPO pour les agents prédateurs
-# dans l’environnement Simple Tag. Mon objectif principal était de comprendre le pipeline complet 
+# dans l’environnement Simple Tag (j'ai égalment tester DQN mais ce n'était pas trés concluant, j'ai vite abandoné pour rester avec PPO). Mon objectif principal était de comprendre le pipeline complet 
 # de l’apprentissage par renforcement multi-agents, plutôt que de viser directement des performances optimales.
 
 # Au départ, j’ai juste mis en place le PPO "de base", sans heuristiques ni améliorations. Rapidement,
